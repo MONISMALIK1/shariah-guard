@@ -16,6 +16,33 @@ as a plain customer explanation and once as a full board-facing audit record.
 | "Is this product/transaction structure compliant?" (e.g. a Mudarabah, a loan) | `shariah_guard.run(query)` | Retrieval + LLM ruling, gated by a **grounded-citation rule** |
 | "Can we invest in this stock?" (AAOIFI equity screening) | `equity_entrypoint.screen_equity_investment(...)` | Deterministic arithmetic — no LLM, no hallucination risk to guard against |
 
+## System design
+
+```mermaid
+graph TD
+    subgraph Equity["Equity screening entry point — equity_entrypoint.py"]
+        A["Numeric AAOIFI rules<br/>(no LLM involved)"]
+    end
+
+    subgraph Query["Product / structure query entry point — shariah_guard.py"]
+        B["retrieve node<br/>Top-k passages from knowledge base"] --> C["decide node<br/>LLM ruling: customer + board text + citations"]
+        C --> Dg["ground_check node<br/>Recovers/validates citations, catches fabrication"]
+        Dg -->|grounded & decisive| E["auto_decision node"]
+        Dg -->|ungrounded or requires_review| F["shariah_board node<br/>LangGraph interrupt/resume"]
+    end
+
+    A --> G["Dual output<br/>customer explanation + board audit log"]
+    E --> G
+    F --> G
+```
+
+The two entry points never merge — they only share the same output contract.
+Equity screening skips the grounding gate entirely because there's no LLM output
+to distrust in that path. The query path always passes through `ground_check`,
+which either lets a decision auto-finalize or forces it to a real, checkpointed
+pause at `shariah_board` — not a poll loop — before either path reaches the same
+dual-output record.
+
 ### The grounded-citation rule
 
 An LLM asked to cite its sources will sometimes cite one that was never actually
@@ -49,7 +76,7 @@ shariah-guard/
 ├── dual_output.py            # customer + board record assembly (LLM path)
 ├── equity_entrypoint.py      # customer + board record assembly (deterministic path)
 ├── shariah_guard.py          # full graph: retrieve -> LLM ruling -> ground-check -> escalate/finalize
-└── test_*.py                 # 24 tests, 19 of which need zero API key
+└── test_*.py                 # 30 tests, all of which need zero API key
 ```
 
 ## Setup
@@ -80,7 +107,7 @@ python equity_entrypoint.py
 # Full LLM + retrieval + escalation graph
 python shariah_guard.py
 
-# All tests (19 of 24 need no API key at all)
+# All 30 tests — none need an API key
 pytest -v
 ```
 
