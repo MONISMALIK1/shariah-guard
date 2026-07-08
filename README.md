@@ -21,27 +21,79 @@ as a plain customer explanation and once as a full board-facing audit record.
 ```mermaid
 graph TD
     subgraph Equity["Equity screening entry point — equity_entrypoint.py"]
-        A["Numeric AAOIFI rules<br/>(no LLM involved)"]
+        A["screen_equity_investment()<br/>Deterministic AAOIFI rules, no LLM"] --> AO["Dual output<br/>equity_screening_log.jsonl"]
     end
 
     subgraph Query["Product / structure query entry point — shariah_guard.py"]
         B["retrieve node<br/>Top-k passages from knowledge base"] --> C["decide node<br/>LLM ruling: customer + board text + citations"]
         C --> Dg["ground_check node<br/>Recovers/validates citations, catches fabrication"]
-        Dg -->|grounded & decisive| E["auto_decision node"]
-        Dg -->|ungrounded or requires_review| F["shariah_board node<br/>LangGraph interrupt/resume"]
+        Dg -->|grounded & decisive| Fin["finalize node"]
+        Dg -->|ungrounded or requires_review| SB["shariah_board node<br/>LangGraph interrupt/resume"]
+        SB --> Fin
+        Fin --> QO["Dual output<br/>board_audit_log.jsonl"]
     end
-
-    A --> G["Dual output<br/>customer explanation + board audit log"]
-    E --> G
-    F --> G
 ```
 
-The two entry points never merge — they only share the same output contract.
-Equity screening skips the grounding gate entirely because there's no LLM output
-to distrust in that path. The query path always passes through `ground_check`,
-which either lets a decision auto-finalize or forces it to a real, checkpointed
-pause at `shariah_board` — not a poll loop — before either path reaches the same
-dual-output record.
+The two entry points never merge — they only share the same output *shape*, not
+the same code path. Equity screening skips the grounding gate entirely because
+there's no LLM output to distrust in that path. The query path always passes
+through `ground_check`, which either lets a decision reach `finalize` directly
+or forces it through a real, checkpointed pause at `shariah_board` — not a poll
+loop — first. Either way, `finalize` is the node that actually produces the
+dual output; there's no separate merge step downstream of it.
+
+### The five nodes in `shariah_guard.py`, in order
+
+Every node is a plain function: it reads the shared `GuardState` and returns a
+partial update that gets merged back in. Here's what each one does and why it's
+a separate node rather than being inlined into the one before or after it.
+
+**`retrieve_node`** — takes `state["query"]`, runs MMR similarity search against
+the shared Chroma knowledge base, and writes back `context` (the numbered
+`[1]...[6]` passage text shown to the model) and `num_passages`. That count is
+not cosmetic — it's the actual registry `ground_check_node` validates citations
+against later.
+
+**`decide_node`** — the only node that calls the LLM. One structured call
+(`.with_structured_output(RulingDecision)`) produces five fields at once:
+`decision`, `confidence`, `cited_sources`, `customer_explanation`, and
+`board_reasoning` — so the two-audience output is one API call, not two. This is
+also where the citation-recovery fix lives: if `cited_sources` comes back empty,
+it falls back to regex-extracting bracket numbers out of `board_reasoning`
+before anything downstream sees it.
+
+**`ground_check_node`** — runs the LLM's claimed citations and `num_passages`
+through `validate_citations()`, which knows nothing about LLMs at all — it's
+pure arithmetic checking every cited number is between 1 and `num_passages`. It
+sets `escalated` with an OR, not an AND: `decision == "requires_review"` OR
+`not grounding.is_grounded`. Either the model admitted uncertainty, or the code
+caught it fabricating a source — and either one alone forces a human into the
+loop. A confident, well-written, fully-hallucinated answer escalates exactly as
+fast as an honest "I don't know."
+
+**`shariah_board_node`** — the function body is `return {}`; that's not an
+unfinished stub, the node itself *is* the pause point. The real mechanism is
+`interrupt_before=["shariah_board"]` on the compiled graph: `LangGraph` halts
+execution immediately before this node runs and persists the state via a
+`MemorySaver` checkpointer. Nothing executes here until something outside the
+graph calls `.invoke(None, config)` again, at which point it resumes exactly
+where it stopped, sees `board_reviewer_note` now populated, and continues.
+
+**`finalize_node`** — both the "grounded and decisive" path and the "escalated
+and resolved" path arrive here. It reconstructs a `GroundingResult`, calls
+`build_dual_output()` to assemble the customer/board split, appends the record
+to `board_audit_log.jsonl`, and writes the packaged result into `state["output"]`.
+
+The only branch in the whole graph is one line:
+
+```python
+graph.add_conditional_edges("ground_check", route_after_grounding, {"board": "shariah_board", "finalize": "finalize"})
+```
+
+`route_after_grounding` just reads `state["escalated"]` and returns a string key;
+`LangGraph` uses that key to pick the next node. Everything upstream of this
+line is linear (`retrieve → decide → ground_check`) — this conditional edge is
+the only decision point.
 
 ### The grounded-citation rule
 
