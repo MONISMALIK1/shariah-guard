@@ -137,9 +137,15 @@ def decide_node(state: GuardState) -> dict:
 def ground_check_node(state: GuardState) -> dict:
     grounding = validate_citations(state["cited_sources"], state["num_passages"])
     # Escalate if the model itself asked for review, OR if the grounding check
-    # catches a fabricated citation regardless of how confident the model was —
-    # a hallucinated citation overrides the model's own stated confidence.
-    escalate = state["decision"] == "requires_review" or not grounding.is_grounded
+    # catches a fabricated citation regardless of how confident the model was,
+    # OR if the model's own self-reported confidence is low. Without that last
+    # condition, a "compliant, low confidence" result auto-finalized as if it
+    # were fully trusted — the model's hedge was recorded but never acted on.
+    escalate = (
+        state["decision"] == "requires_review"
+        or not grounding.is_grounded
+        or state["confidence"] == "low"
+    )
     return {
         "is_grounded": grounding.is_grounded,
         "hallucinated_citations": grounding.hallucinated_citations,
