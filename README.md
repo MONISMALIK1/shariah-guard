@@ -119,6 +119,32 @@ path is deliberately kept separate from the LLM pipeline: there's no judgment
 call here, and forcing arithmetic through a citation-grounding check built for
 LLM output would be solving a problem that can't occur in this path.
 
+## Knowledge base
+
+The `retrieve` node queries a Chroma vector store built from three PDFs (118 pages,
+244 chunks), all official Central Bank of the UAE (CBUAE) regulatory publications —
+deliberately not unauthorized reposts of AAOIFI's own commercially-sold Standards
+book, which is a different legitimacy tier.
+
+| File | Pages | Source | Covers |
+|---|---|---|---|
+| `sharia.pdf` | 38 | CBUAE Shari'ah governance standard | Institutional oversight — Internal Shari'ah Supervision Committee requirements, governance policies |
+| `cbuae_liquidity_islamic_banks.pdf` | 59 | CBUAE "Standard Re Liquidity at Islamic Banks" (Notice CBUAE/BSD/N/2022/11), official bilingual PDF from `rulebook.centralbank.ae` | Liquidity risk management; Mudarabah/Wakala/Musharakah as liquidity instruments |
+| `cbuae_risk_management_islamic_banks.pdf` | 21 | CBUAE "Standard re Risk Management Requirements for Islamic Banks", same official source | Risk governance; defines Restricted/Unrestricted Investment Accounts, profit-sharing/loss-bearing instrument requirements |
+
+These live in `../sharia-law-rag/docs/` (see Setup below) since the vector store is
+shared with that sibling project.
+
+**Scope, honestly stated:** all three documents are *institutional/prudential
+regulation* for how Islamic banks must govern themselves, manage risk, and
+structure investment accounts. None of them are product-ruling fiqh texts (they
+don't define whether Mudarabah itself is permissible, or lay out Murabaha's exact
+conditions), and none of them cover personal worship obligations like Zakat
+calculation. Questions outside that scope correctly escalate or land as
+`requires_review` — that's the retrieval honestly reporting a real gap in the
+knowledge base, not a bug to prompt around. Extending scope means adding the
+relevant source documents, not adjusting the prompt or confidence thresholds.
+
 ## Project layout
 
 ```
