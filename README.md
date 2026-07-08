@@ -16,6 +16,32 @@ as a plain customer explanation and once as a full board-facing audit record.
 | "Is this product/transaction structure compliant?" (e.g. a Mudarabah, a loan) | `shariah_guard.run(query)` | Retrieval + LLM ruling, gated by a **grounded-citation rule** |
 | "Can we invest in this stock?" (AAOIFI equity screening) | `equity_entrypoint.screen_equity_investment(...)` | Deterministic arithmetic — no LLM, no hallucination risk to guard against |
 
+## Routing — the front door
+
+A caller shouldn't have to already know which entry point applies, and an
+out-of-scope question (a personal Zakat question, a general fiqh question with
+nothing to do with a bank) shouldn't burn a full retrieve + structured-LLM-ruling
+cycle just to land on an unhelpful `requires_review`. `router.py` adds one cheap
+classification call in front of the expensive pipeline:
+
+```python
+from router import route
+result = route("Is a Mudarabah profit-sharing investment compliant?")
+```
+
+It classifies the query into one of three categories and only forwards to the
+full `shariah_guard` graph when genuinely warranted:
+
+| Classification | What happens |
+|---|---|
+| `institutional_compliance` | Forwarded to `shariah_guard.run(query)` — the full graph below |
+| `equity_screening` | Short-circuited with a message asking for the financial figures `equity_entrypoint.py` actually needs |
+| `out_of_scope` | Short-circuited immediately — no retrieval, no ruling call — with a message pointing the customer to a qualified scholar |
+
+The branching logic (`route_from_classification`) is pure and tested without any
+API call; only the classification itself and the forwarding call to the real
+graph need a live model.
+
 ## System design
 
 ```mermaid
@@ -154,7 +180,8 @@ shariah-guard/
 ├── dual_output.py            # customer + board record assembly (LLM path)
 ├── equity_entrypoint.py      # customer + board record assembly (deterministic path)
 ├── shariah_guard.py          # full graph: retrieve -> LLM ruling -> ground-check -> escalate/finalize
-└── test_*.py                 # 30 tests, all of which need zero API key
+├── router.py                  # front door: cheap classification before the expensive graph runs
+└── test_*.py                 # 34 tests, all of which need zero API key
 ```
 
 ## Setup
@@ -179,13 +206,16 @@ export GEMINI_API_KEY=your-key-here
 ## Running it
 
 ```bash
+# Recommended entry point — classifies first, only runs the full graph when warranted
+python router.py "Is a Mudarabah profit-sharing investment compliant?"
+
 # Deterministic equity screen — no API key needed
 python equity_entrypoint.py
 
-# Full LLM + retrieval + escalation graph
+# Full LLM + retrieval + escalation graph directly, bypassing the classifier
 python shariah_guard.py
 
-# All 30 tests — none need an API key
+# All 34 tests — none need an API key
 pytest -v
 ```
 
