@@ -1,5 +1,5 @@
 import pytest
-from citation_guard import validate_citations
+from citation_guard import validate_citations, extract_citations_from_text
 
 
 def test_all_citations_valid():
@@ -46,3 +46,37 @@ def test_zero_passages_shown_means_any_citation_is_hallucinated():
 def test_negative_num_passages_raises():
     with pytest.raises(ValueError):
         validate_citations(cited_sources=[1], num_passages_shown=-1)
+
+
+# ── extract_citations_from_text ─────────────────────────────────────────
+
+def test_extract_single_citations():
+    text = "This is confirmed in [1] and further supported by [3]."
+    assert extract_citations_from_text(text) == [1, 3]
+
+
+def test_extract_grouped_citation_bracket():
+    text = "Multiple passages [1, 2] establish this requirement."
+    assert extract_citations_from_text(text) == [1, 2]
+
+
+def test_extract_dedupes_repeated_citations():
+    text = "As stated in [1], and again in [1], this holds. See also [2]."
+    assert extract_citations_from_text(text) == [1, 2]
+
+
+def test_extract_returns_sorted_regardless_of_order_in_text():
+    text = "First [3], then [1], then [2]."
+    assert extract_citations_from_text(text) == [1, 2, 3]
+
+
+def test_extract_no_citations_present():
+    text = "This text has no bracket citations at all."
+    assert extract_citations_from_text(text) == []
+
+
+def test_extract_ignores_non_numeric_brackets():
+    # Bracketed non-numeric content (e.g. a stray footnote marker) shouldn't
+    # be mistaken for a citation.
+    text = "See the appendix [see below] and passage [2]."
+    assert extract_citations_from_text(text) == [2]

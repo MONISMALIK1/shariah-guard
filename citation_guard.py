@@ -14,6 +14,7 @@ the indices of passages that were actually retrieved and shown to the model
 for that specific query. Anything outside that range is provably fabricated,
 full stop, regardless of how plausible it sounds.
 """
+import re
 from dataclasses import dataclass
 
 
@@ -22,6 +23,26 @@ class GroundingResult:
     is_grounded: bool
     valid_citations: list[int]
     hallucinated_citations: list[int]
+
+
+def extract_citations_from_text(text: str) -> list[int]:
+    """
+    Recover citation numbers from bracket notation in free text, e.g.
+    "...as shown in [1] and [3]..." or "[2, 4]" -> [1, 3] / [2, 4].
+
+    This exists because the model has been observed writing accurate bracket
+    citations into board_reasoning while leaving the separate structured
+    cited_sources field empty — a structured-output reliability gap, not a
+    grounding failure. Rather than trust the model to fill in the same
+    information twice, recover it mechanically from the text where it
+    reliably does appear.
+    """
+    matches = re.findall(r"\[(\d+(?:\s*,\s*\d+)*)\]", text)
+    citations: set[int] = set()
+    for group in matches:
+        for num in group.split(","):
+            citations.add(int(num.strip()))
+    return sorted(citations)
 
 
 def validate_citations(cited_sources: list[int], num_passages_shown: int) -> GroundingResult:

@@ -23,7 +23,7 @@ from langchain_chroma import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from citation_guard import validate_citations
+from citation_guard import validate_citations, extract_citations_from_text
 from dual_output import build_dual_output
 
 SHARED_KNOWLEDGE_BASE = os.path.join(
@@ -116,10 +116,19 @@ def retrieve_node(state: GuardState) -> dict:
 def decide_node(state: GuardState) -> dict:
     chain = prompt | model
     result = chain.invoke({"context": state["context"], "query": state["query"]})
+
+    cited_sources = result.cited_sources
+    if not cited_sources:
+        # Structured-output reliability gap, not a grounding failure: the
+        # model has been observed writing accurate bracket citations into
+        # board_reasoning while leaving this field empty. Recover them
+        # mechanically from the text rather than trusting the field alone.
+        cited_sources = extract_citations_from_text(result.board_reasoning)
+
     return {
         "decision": result.decision,
         "confidence": result.confidence,
-        "cited_sources": result.cited_sources,
+        "cited_sources": cited_sources,
         "customer_explanation": result.customer_explanation,
         "board_reasoning": result.board_reasoning,
     }
@@ -218,5 +227,10 @@ def run(query: str) -> dict:
 
 
 if __name__ == "__main__":
-    run("Is a Mudarabah profit-and-loss sharing investment between a bank and a small business compliant?")
-    run("A fixed 5% annual interest personal loan.")
+    import sys
+
+    if len(sys.argv) > 1:
+        run(" ".join(sys.argv[1:]))
+    else:
+        query = input("Enter your Shari'ah compliance query: ")
+        run(query)
