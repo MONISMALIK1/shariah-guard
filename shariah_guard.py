@@ -69,11 +69,14 @@ class GuardState(TypedDict):
     output: dict
 
 
-# ── Shared resources ─────────────────────────────────────────────────────
-
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vectorstore = Chroma(persist_directory=SHARED_KNOWLEDGE_BASE, embedding_function=embeddings)
-retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 6, "fetch_k": 20})
+# ── Shared resources — constructed lazily, on first real use ────────────
+#
+# ChatGoogleGenerativeAI validates its API key eagerly at construction time,
+# which would otherwise make this module unimportable (and its graph wiring
+# untestable without live network calls) in any environment without
+# GEMINI_API_KEY set — same fix already applied to router.py. Retriever
+# construction is lazy too, so tests can swap in a fake without loading the
+# real embedding model or requiring the sibling knowledge base to exist.
 
 SYSTEM_PROMPT = """You are a Shari'ah compliance ruling assistant for an AI-native Islamic bank.
 Evaluate the query strictly against the retrieved context below.
@@ -95,11 +98,31 @@ prompt = ChatPromptTemplate.from_messages([
     ("human", "Retrieved context:\n{context}\n\nQuery:\n{query}"),
 ])
 
-model = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.environ["GEMINI_API_KEY"],
-    max_tokens=4096,
-).with_structured_output(RulingDecision)
+_retriever = None
+
+
+def _get_retriever():
+    global _retriever
+    if _retriever is None:
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        vectorstore = Chroma(persist_directory=SHARED_KNOWLEDGE_BASE, embedding_function=embeddings)
+        _retriever = vectorstore.as_retriever(search_type="mmr", search_kwargs={"k": 6, "fetch_k": 20})
+    return _retriever
+
+
+_decision_chain = None
+
+
+def _get_decision_chain():
+    global _decision_chain
+    if _decision_chain is None:
+        model = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=os.environ["GEMINI_API_KEY"],
+            max_tokens=4096,
+        ).with_structured_output(RulingDecision)
+        _decision_chain = prompt | model
+    return _decision_chain
 
 
 def format_with_sources(docs) -> str:
@@ -109,13 +132,12 @@ def format_with_sources(docs) -> str:
 # ── Nodes ────────────────────────────────────────────────────────────────
 
 def retrieve_node(state: GuardState) -> dict:
-    docs = retriever.invoke(state["query"])
+    docs = _get_retriever().invoke(state["query"])
     return {"context": format_with_sources(docs), "num_passages": len(docs)}
 
 
 def decide_node(state: GuardState) -> dict:
-    chain = prompt | model
-    result = chain.invoke({"context": state["context"], "query": state["query"]})
+    result = _get_decision_chain().invoke({"context": state["context"], "query": state["query"]})
 
     cited_sources = result.cited_sources
     if not cited_sources:

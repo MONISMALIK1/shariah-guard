@@ -181,7 +181,8 @@ shariah-guard/
 ├── equity_entrypoint.py      # customer + board record assembly (deterministic path)
 ├── shariah_guard.py          # full graph: retrieve -> LLM ruling -> ground-check -> escalate/finalize
 ├── router.py                  # front door: cheap classification before the expensive graph runs
-└── test_*.py                 # 34 tests, all of which need zero API key
+└── test_*.py                 # 39 tests, all of which need zero API key — including
+                              #   the graph's own routing/escalation/interrupt-resume wiring
 ```
 
 ## Setup
@@ -215,7 +216,7 @@ python equity_entrypoint.py
 # Full LLM + retrieval + escalation graph directly, bypassing the classifier
 python shariah_guard.py
 
-# All 34 tests — none need an API key
+# All 39 tests — none need an API key
 pytest -v
 ```
 
@@ -232,3 +233,11 @@ pytest -v
   `interrupt_before` node with a checkpointer — execution genuinely halts and can
   resume later (even in a different process), the same pattern proven in the
   `support-triage-agent` project.
+- **The graph's own wiring is tested, not just the pure-logic modules underneath
+  it.** `shariah_guard.py` used to be the only file with zero test coverage,
+  because `ChatGoogleGenerativeAI` validates its API key eagerly at construction
+  time — importing the module at all required a real key. Model and retriever
+  construction moved to lazy singletons (`_get_decision_chain()`,
+  `_get_retriever()`), so tests can monkeypatch them with fakes and run the real
+  compiled graph — real routing, real conditional edges, a real interrupt/resume
+  cycle — with zero network calls.
