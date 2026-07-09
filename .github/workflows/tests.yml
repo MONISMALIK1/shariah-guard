@@ -17,7 +17,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: pip install pytest pydantic langchain-google-genai
+        run: pip install pytest pydantic langchain-google-genai langgraph langchain-huggingface langchain-chroma
 
       - name: Run tests
         run: pytest -v
